@@ -1,5 +1,6 @@
-# Plain-text data files
+# Data files
 *.txt
+*.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
