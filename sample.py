@@ -1,12 +1,12 @@
+import string
 import torch
 
-from model_rnn import *
+from rnn_model import *
 from read import *
-from train_snd_save import *
+from utils import *
 
 # The maximum possible length of generated book title
-max_length = 30
-
+max_length = 50
 rnn = torch.load(model_save_name)
 
 # Random choice from a list

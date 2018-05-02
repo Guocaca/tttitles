@@ -1,93 +1,92 @@
-from __future__ import print_function, division
-import time
-import math
-import string
-
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
+import argparse
+import os
+from tqdm import tqdm
+from utils import *
+from char_rnn_model import *
+from generate import *
 
-import matplotlib.pyplot as plt
+# Parse command line arguments
+argparser = argparse.ArgumentParser()
+argparser.add_argument('filename', type=str)
+argparser.add_argument('--model', type=str, default="lstm")
+argparser.add_argument('--n_epochs', type=int, default=50, help='number of full passes through the training data')
+argparser.add_argument('--print_every', type=int, default=1, help='the number of minibatches between printing')
+argparser.add_argument('--hidden_size', type=int, default=128, help='size of internal state')
+argparser.add_argument('--n_layers', type=int, default=2, help='number of hidden layers')
+argparser.add_argument('--learning_rate', type=float, default=2e-3, help='learning rate')
+argparser.add_argument('--chunk_len', type=int, default=200, help='maximum length for each training sample')
+argparser.add_argument('--batch_size', type=int, default=50, help='number of sequences to train in parallel')
+argparser.add_argument('--dropout', type=float, default=0, help='dropout for regularization')
+args = argparser.parse_args()
 
-from read import *
-from rnn_model import *
+file, file_len = read_file(args.filename)
+num_batches = args.n_epochs * (file_len / args.batch_size)
 
-# Some parameters to adjust
-learning_rate = 0.005
-dropout = 0.1
-n_iters = 100000
-print_every = 5000
-plot_every = 500
-hidden_size = 256
-criterion = nn.NLLLoss()
+def random_training_set(chunk_len, batch_size):
+    inp = torch.LongTensor(batch_size, chunk_len)
+    target = torch.LongTensor(batch_size, chunk_len)
+    for bi in range(batch_size):
+        start_index = random.randint(0, file_len - chunk_len)
+        end_index = start_index + chunk_len + 1
+        chunk = file[start_index:end_index]
+        inp[bi] = char_tensor(chunk[:-1])
+        target[bi] = char_tensor(chunk[1:])
+    inp = Variable(inp)
+    target = Variable(target)
+    return inp, target
 
-model_save_name = 'char_rnn_model.pt'
-
-# Timer
-def timeSince(since):
-    now = time.time()
-    s = now - since
-    m = math.floor(s / 60)
-    s -= m * 60
-    return '%dm %ds' % (m, s)
-
-# One-hot matrix of first to last letters (not including EOS) for input
-def inputTensor(line):
-    tensor = torch.zeros(len(line), 1, n_letters)
-    for li in range(len(line)):
-        letter = line[li]
-        tensor[li][0][all_letters.find(letter)] = 1
-    return tensor
-
-# LongTensor of second letter to end (EOS) for target
-def targetTensor(line):
-    letter_indexes = [all_letters.find(line[li]) for li in range(1, len(line))]
-    letter_indexes.append(n_letters - 1) # EOS
-    return torch.LongTensor(letter_indexes) 
-
-# Generate random training example
-def randomTrainingExample():
-    line = randomChoice(all_titles)
-    input_line_tensor = Variable(inputTensor(line))
-    target_line_tensor = Variable(targetTensor(line))
-    return input_line_tensor, target_line_tensor
-
-# Initiate some parameters for training
-rnn = RNN(n_letters, hidden_size, n_letters, dropout)
-
-# Training the neural network
-def train(input_line_tensor, target_line_tensor):
-    hidden = rnn.initHidden()
-    rnn.zero_grad()
+def train(inp, target):
+    hidden = decoder.init_hidden(args.batch_size)
+    decoder.zero_grad()
     loss = 0
 
-    for i in range(input_line_tensor.size()[0]):
-        output, hidden = rnn(input_line_tensor[i], hidden)
-        loss += criterion(output, target_line_tensor[i])
+    for c in range(args.chunk_len):
+        output, hidden = decoder(inp[:,c], hidden)
+        loss += criterion(output.view(args.batch_size, -1), target[:,c])
 
     loss.backward()
+    decoder_optimizer.step()
 
-    for p in rnn.parameters():
-        p.data.add_(-learning_rate, p.grad.data)
+    return loss.data[0] / args.chunk_len
 
-    return output, loss.data[0] / input_line_tensor.size()[0]
+def save():
+    save_filename = os.path.splitext(os.path.basename(args.filename))[0] + '.pt'
+    torch.save(decoder, save_filename)
+    print('Saved as %s' % save_filename)
 
-# Start training here
-all_losses = []
-total_loss = 0 # Reset every plot_every iters
+# Initialize models and start training
+
+decoder = CharRNN(
+    n_characters,
+    args.hidden_size,
+    n_characters,
+    model=args.model,
+    n_layers=args.n_layers,
+    dropout=args.dropout
+)
+decoder_optimizer = torch.optim.Adam(decoder.parameters(), lr=args.learning_rate)
+criterion = nn.CrossEntropyLoss()
 
 start = time.time()
+all_losses = []
+loss_avg = 0
 
-for iter in range(1, n_iters + 1):
-    output, loss = train(*randomTrainingExample())
-    total_loss += loss
+try:
+    print("Training for %d epochs..." % args.n_epochs)
+    for epoch in tqdm(range(1, num_batches + 1)):
+        loss = train(*random_training_set(args.chunk_len, args.batch_size))
+        loss_avg += loss
 
-    if iter % print_every == 0:
-        print('%s (%d %d%%) %.4f' % (timeSince(start), iter, iter / n_iters * 100, loss))
+        if epoch % (args.print_every * args.batch_size) == 0:
+            print('[%s (%d %d%%) %.4f]' % (time_since(start), epoch, epoch / args.n_epochs * 100, loss))
+            # print(generate(decoder, 'Wh', 100), '\n')
 
-    if iter % plot_every == 0:
-        all_losses.append(total_loss / plot_every)
-        total_loss = 0
+    print("Saving...")
+    save()
 
-plt.plot(all_losses)
-torch.save(rnn, model_save_name)
+except KeyboardInterrupt:
+    print("Saving before quit...")
+    save()

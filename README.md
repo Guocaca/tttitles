@@ -10,4 +10,4 @@ A neural network that learns to generate interesting book titles.
 - Tune the parameters like `learning_rate`, `dropout`, etc.
 
 ## Generate some fun book titles
-- Read the model from file and generate random fun book titles.
+- Run `python sample.py` to read the model from file and generate random fun book titles.
